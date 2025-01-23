@@ -1,0 +1,241 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import re
+from thefuzz import fuzz,  process
+import seaborn as sns
+import matplotlib.ticker as mtick
+
+def extract(file_path):
+    data = pd.read_csv(file_path, encoding='ISO-8859-1')
+    print(f'Here is a little bit of information about the data stored in {file_path}:')
+    print(f'\nThere are {data.shape[0]} rows and {data.shape[1]} columns in this DataFrame.')
+    print('\nThe columns in this DataFrame take the following types: ')
+    print(data.dtypes)
+
+    print(f'\nTo view the DataFrame extracted from {file_path}, display the value returned by this function!\n\n')
+    return data
+
+file_path = r'C:\Users\Bloombie\Desktop\pet\position_salary.csv'
+it_company_data = extract(file_path)
+#pd.set_option('display.max_rows', None)
+#print(data.head)
+
+
+def transform(data):
+    
+    # 1. Data Cleaning
+    
+    data = data.fillna('Unknown')
+    data.rename(columns={'Position' : 'position', 'Location' : 'location', 'Gender' : 'gender', 'Education' : 'education', 'Experience (Years)' : 'experience_years', 'Salary' : 'salary'}, inplace = True)
+    data.drop_duplicates(inplace = True)
+    data['salary'].fillna(data['salary'].mean(), inplace=True)
+    data.dropna(subset=['salary', 'experience_years'], inplace=True)
+
+
+    # 2. Data Enrichment 
+
+    location_mapping = {
+        'nioda - uttar pradesh': 'noida',
+        'new delhi, delhi, noida, pune - delhi': 'new delhi',
+        'work from home banglore - karnataka': 'bengaluru',
+        'meerut - united states (usa)': 'meerut',
+        'navi mumbai and pune - maharashtra': 'navi mumbai',
+        'pune, kolhapur - maharashtra': 'pune',
+        'mumbai, maharashtra, pune - maharashtra': 'mumbai',
+        'mumbai, maharashtra - maharashtra': 'mumbai',
+        'vishakapatnam - andhra pradesh': 'visakhapatnam',
+        'ahemdabad - gujarat': 'ahmedabad',
+        'cuttack, odisha - odisha': 'cuttack',
+        'fazilka , punjab - punjab': 'fazilka',
+        'rudrpur - uttarakhand': 'rudrapur',
+        'uttar pradesh - uttar pradesh': 'uttar pradesh',
+        'dehli - delhi': 'new delhi',
+        
+    }
+
+    def standardize_location(location):
+        location = location.lower().strip()
+        return location_mapping.get(location, location)         # dict.get(key, default)
+
+    data['location'] = data['location'].apply(standardize_location)
+    data['location'] = data['location'].str.title()
+
+    print(data['location'].value_counts())
+
+    def simplify_position(position):
+        patterns = {
+            r'maths':'Maths Teacher',
+            r'research':'Research Analyst',
+            r'azure':'Azure Architect',
+            r'.net':'.Net Developer',
+            r'science':'Data Science',
+            r'ios':'IOS Developer',
+            r'html|css':'HTML/CSS Developer',
+            r'excel':'Excel Engineer',
+            r'(security|cyber)':'Security Engineer',
+            r'php':'PHP Developer',
+            r'(cloud|aws)':'Cloud Engineer',
+            r'(trading|trade|finance)':'Trading Engineer',
+            r'(etl|big)':'ETL Engineer',
+            r'cuda':'Cuda Developer',
+            r'linux|ubuntu':'Linux Engineer',
+            r'devops':'DevOps Engineer',
+            r'human|hr':'HR',
+            r'tableau':'Tableau Engineer',
+            r'business|buisiness':'Business Analyst',
+            r'(Salesforce|Salesfoce|Slaesforce)':'Salesforce Developer',
+            r'(Python)':'Python Developer',
+            r'(sql)':'SQL Developer',
+            r'(script)':'JavaScript Developer',
+            r'(Snokflak|Snowflake)':'Snowflake Engineer',
+            r'(manager|management)': 'Project Manager',
+            r'(testing|qa)': 'QA/Testing',
+            r'(java|jawa|spring boot)': 'Java Developer',
+            r'(senior|lead)': 'Senior Role',
+            r'(data|provider|database|db)': 'Data Management',
+            r'(andiriod|andriod)': 'Android Developer',
+            r'(ui|ux)':'UX/UI Designer',
+        }
+        
+        for pattern, replacement in patterns.items():
+            if re.search(pattern, position, re.IGNORECASE):
+                return replacement
+
+        return 'Other'
+
+    data['position'] = data['position'].apply(simplify_position)
+
+    unique_positions = data['position'].unique()
+    for position in unique_positions:
+        match = process.extractOne(position, unique_positions, score_cutoff=80)
+        if match:
+            data['position'] = data['position'].replace(position, match[0])
+
+
+
+    # 3. Data Transformation 
+
+    gender_mapping = {
+    'Female': 'F',
+    'Male': 'M'
+    }
+
+    data['gender'] = data['gender'].map(gender_mapping)
+
+    bins = [0, 5, 10, 15, 20, 25, float('inf')]
+    labels = ['0-5', '6-10', '11-15', '16-20', '21-25', '26+']
+    data['experience_category'] = pd.cut(data['experience_years'], bins=bins, labels=labels, right=False)
+
+    # or
+    #data['experience_category'] = pd.cut(data['experience_years'], bins=[0, 5, 10, 20, 30], labels=['0-5', '6-10', '11-20', '21-30'])
+
+
+    # 4. Validation 
+
+    data_sorted = data.sort_values(by=['experience_years'])
+    print(data_sorted[['experience_years', 'salary']])
+
+    print(data[['experience_years', 'salary']].describe())
+
+    # Identify records where salary is too low/high for experience
+    low_salary = data[data['salary'] < data['salary'].quantile(0.25)]
+    high_salary = data[data['salary'] > data['salary'].quantile(0.75)]
+
+    print("Low salaries:")
+    print(low_salary)
+    print("High salaries:")
+    print(high_salary)
+
+    grouped = data.groupby('experience_category')['salary'].mean().reset_index()
+    print(grouped)
+
+    data_grouped = data.groupby('experience_category')['salary'].agg(['min', 'max', 'mean'])
+    print(data_grouped)
+
+    # Identify employees earning below or above category average
+    data['salary_anomaly'] = data.apply(lambda x: 'Below Average' if x['salary'] < data_grouped.loc[x['experience_category'], 'mean']
+                                    else 'Above Average', axis=1)
+    print(data[['experience_category', 'salary', 'salary_anomaly']])
+
+    data['experience_years'] = data['experience_years'].astype(str)
+    print(data[data['experience_years'].str.contains('[^0-9]')])  # Look for non-numeric values
+
+    data.loc[data['salary'] < 50000, 'salary'] = data['salary'].median()
+
+    # Check data types
+    print(data.dtypes)
+
+    # Convert columns to numeric, forcing errors to NaN to detect issues
+    data['salary'] = pd.to_numeric(data['salary'], errors='coerce')
+    data['experience_years'] = pd.to_numeric(data['experience_years'], errors='coerce')
+
+    # Check if any values were converted to NaN
+    print(data[data['salary'].isna()])
+    print(data[data['experience_years'].isna()])
+
+    data.columns = data.columns.str.strip()
+    print(data.isnull().sum())
+    data.dropna(subset=['salary', 'experience_years'], inplace=True)
+    summary = data.groupby('experience_category').agg({
+        'salary': ['min', 'max', 'mean'],
+        'experience_years': 'mean'
+    })
+
+    print(summary)
+    print(data.columns)
+
+    # Distribution of Data
+    print(data['experience_category'].value_counts())
+
+    # Salary Per Year Consistency
+    data['salary_per_year'] = data['salary'] / data['experience_years']
+    print(data.groupby('experience_category')['salary_per_year'].mean())
+
+    # Calculate salary per year of experience (salary_per_year = salary / experience_years).
+    data['salary_per_year'] = (data['salary'] / data['experience_years']).astype(int)
+
+    # Create a scatter plot to visualize the relationship between experience (x-axis) and salary (y-axis)
+    plt.figure(figsize=(10, 6))
+    ax = sns.scatterplot(x='experience_years', y='salary', data=data)
+    ax.yaxis.set_major_formatter(mtick.FuncFormatter(lambda x, _: f"${x/1_000_000:.2f}M"))
+    plt.title('Salary Distribution by Experience (Years)')
+    plt.xlabel('Experience (Years)', fontsize = 14)
+    plt.ylabel('Salary')
+    plt.xticks(rotation=45)
+    plt.show()
+
+    # Create a box plot to visualize the distribution of salary per year across different positions
+    plt.figure(figsize=(15, 8))
+    sns.boxplot(x='position', y='salary_per_year', data=data)
+    plt.xticks(rotation=90)
+    plt.show()
+
+    # Create a scatter plot to visualize correlation between salary and experience
+    plt.figure(figsize=(8, 6))
+    sns.scatterplot(x='experience_years', y='salary_per_year', data=data)
+    plt.show()
+
+    return data
+
+clean_data = transform(it_company_data)
+print(clean_data)
+
+
+from sqlalchemy import create_engine
+def load(data, host, port, database, user_name, password):
+
+    host = host     # "localhost" or your remote server IP
+    port = port     # "5432" default PostgreSQL port
+    database = database     # your_db_name
+    user = user_name
+    password = password
+
+    # Create the connection string
+    engine = create_engine(f'postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}')
+
+
+    data.to_sql('your_table_name', con=engine, if_exists='replace', index=False)
+    result = pd.read_sql('SELECT * FROM your_table_name LIMIT 5', con=engine)
+    print(result)
+
+    engine.dispose()
